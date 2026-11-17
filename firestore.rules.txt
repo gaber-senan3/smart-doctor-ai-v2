@@ -1,0 +1,380 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Hardened Global Helpers
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedEmail() && request.auth.uid == userId;
+    }
+
+    function isFounder() {
+      return isVerifiedEmail()
+        && request.auth.token.email == 'gabersenan3@gmail.com';
+    }
+
+    function isApprovedDoctor(userId) {
+      return isVerifiedEmail()
+        && exists(/databases/$(database)/documents/role_grants/$(userId))
+        && get(/databases/$(database)/documents/role_grants/$(userId)).data.role == 'doctor';
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isOptString(data, field, maxLen) {
+      return !(field in data) || (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    function isAuthorizedUserRole(role, userId) {
+      return role == 'patient'
+        || (role == 'founder_developer' && isFounder() && request.auth.uid == userId)
+        || (role == 'doctor' && isApprovedDoctor(userId));
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidUserProfile(data, userId) {
+      return data.keys().hasAll(['uid', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'role', 'createdAt', 'updatedAt'])
+        && data.uid == userId
+        && data.uid == request.auth.uid
+        && data.displayName is string
+        && data.displayName.size() >= 1
+        && data.displayName.size() <= 160
+        && data.role in ['founder_developer', 'doctor', 'patient']
+        && isAuthorizedUserRole(data.role, userId)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidRoleGrant(data, targetUid) {
+      return data.keys().hasAll(['uid', 'role', 'grantedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'role', 'targetEmail', 'note', 'grantedByUid', 'createdAt', 'updatedAt'])
+        && data.uid == targetUid
+        && isValidId(data.uid)
+        && data.role in ['doctor', 'patient']
+        && data.grantedByUid == request.auth.uid
+        && isOptString(data, 'targetEmail', 180)
+        && isOptString(data, 'note', 400)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPlatformSettings(data, settingId) {
+      return settingId == 'global'
+        && data.keys().hasAll([
+          'id', 'founderSignature', 'allowPublicBasicAccess', 'ephemeralPrivacyDefault',
+          'maxUploadSizeMb', 'lockFounderBranding', 'updatedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'founderSignature', 'allowPublicBasicAccess', 'ephemeralPrivacyDefault',
+          'maxUploadSizeMb', 'lockFounderBranding', 'updatedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.id == 'global'
+        && data.founderSignature == 'Founder & Developer – Jaber Senan'
+        && data.allowPublicBasicAccess is bool
+        && data.ephemeralPrivacyDefault is bool
+        && data.maxUploadSizeMb is number
+        && data.maxUploadSizeMb >= 1
+        && data.maxUploadSizeMb <= 15
+        && data.lockFounderBranding is bool
+        && data.updatedByUid == request.auth.uid
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPatientFile(data, userId, patientId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'fileNumber', 'fullName', 'age', 'sex', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'fileNumber', 'fullName', 'age', 'sex',
+          'phoneOrNotes', 'chronicConditions', 'allergies', 'createdAt', 'updatedAt'
+        ])
+        && data.id == patientId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.fileNumber is string
+        && data.fileNumber.size() >= 1
+        && data.fileNumber.size() <= 40
+        && data.fullName is string
+        && data.fullName.size() >= 1
+        && data.fullName.size() <= 160
+        && data.age is number
+        && data.age >= 0
+        && data.age <= 125
+        && data.sex in ['male', 'female']
+        && isOptString(data, 'phoneOrNotes', 500)
+        && isOptString(data, 'chronicConditions', 1000)
+        && isOptString(data, 'allergies', 1000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVitalSigns(v) {
+      return v is map
+        && v.keys().hasOnly([
+          'bloodPressure', 'heartRate', 'temperature',
+          'oxygenSaturation', 'respiratoryRate', 'weightKg', 'bloodGlucose'
+        ])
+        && isOptString(v, 'bloodPressure', 32)
+        && isOptString(v, 'heartRate', 32)
+        && isOptString(v, 'temperature', 32)
+        && isOptString(v, 'oxygenSaturation', 32)
+        && isOptString(v, 'respiratoryRate', 32)
+        && isOptString(v, 'weightKg', 32)
+        && isOptString(v, 'bloodGlucose', 32);
+    }
+
+    function isValidPatientVisit(data, userId, patientId, visitId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'patientId', 'fileNumber', 'visitDate',
+          'clinicOrDoctor', 'reasonAr', 'findingsOrRecommendationsAr',
+          'doctorReviewStatus', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'patientId', 'fileNumber', 'visitDate',
+          'clinicOrDoctor', 'reasonAr', 'currentSymptomsAr', 'pastMedicalHistoryAr',
+          'drugAllergiesAr', 'vitalSigns', 'physicalExamAr', 'preliminaryDiagnosisAr',
+          'findingsOrRecommendationsAr', 'medicationsMentioned', 'labOrdersAr',
+          'doctorNotesAr', 'linkedReportIds', 'doctorReviewStatus',
+          'reviewedByDoctorName', 'reviewedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.id == visitId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.patientId == patientId
+        && isValidId(data.patientId)
+        && data.fileNumber is string && data.fileNumber.size() >= 1 && data.fileNumber.size() <= 40
+        && data.visitDate is string && data.visitDate.size() >= 4 && data.visitDate.size() <= 64
+        && data.clinicOrDoctor is string && data.clinicOrDoctor.size() >= 1 && data.clinicOrDoctor.size() <= 200
+        && data.reasonAr is string && data.reasonAr.size() >= 1 && data.reasonAr.size() <= 1500
+        && data.findingsOrRecommendationsAr is string && data.findingsOrRecommendationsAr.size() <= 4000
+        && data.doctorReviewStatus in ['pending_review', 'reviewed_confirmed']
+        && (data.doctorReviewStatus == 'pending_review' || isFounder() || isApprovedDoctor(userId))
+        && isOptString(data, 'currentSymptomsAr', 3000)
+        && isOptString(data, 'pastMedicalHistoryAr', 3000)
+        && isOptString(data, 'drugAllergiesAr', 1500)
+        && isOptString(data, 'physicalExamAr', 3000)
+        && isOptString(data, 'preliminaryDiagnosisAr', 2000)
+        && isOptString(data, 'medicationsMentioned', 2000)
+        && isOptString(data, 'labOrdersAr', 2000)
+        && isOptString(data, 'doctorNotesAr', 4000)
+        && isOptString(data, 'reviewedByDoctorName', 160)
+        && isOptString(data, 'reviewedAt', 64)
+        && (!('vitalSigns' in data) || isValidVitalSigns(data.vitalSigns))
+        && (!('linkedReportIds' in data) || (
+          data.linkedReportIds is list
+          && data.linkedReportIds.size() <= 50
+          && (data.linkedReportIds.size() == 0 || data.linkedReportIds[0] is string)
+        ))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPatientLabRecord(data, userId, patientId, reportId) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'patientId', 'recordedAt', 'sourceType',
+          'analysis', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'patientId', 'recordedAt', 'sourceType',
+          'fileName', 'notes', 'analysis', 'createdAt', 'updatedAt'
+        ])
+        && data.id == reportId
+        && isValidId(data.id)
+        && data.ownerId == userId
+        && data.ownerId == request.auth.uid
+        && data.patientId == patientId
+        && isValidId(data.patientId)
+        && data.recordedAt is string && data.recordedAt.size() >= 4 && data.recordedAt.size() <= 64
+        && data.sourceType in ['image', 'pdf', 'text', 'sample']
+        && isOptString(data, 'fileName', 260)
+        && isOptString(data, 'notes', 2000)
+        && data.analysis is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // 4. Collection Rules
+
+    // Role Grants Registry (Managed EXCLUSIVELY by Founder & Developer)
+    match /role_grants/{targetUid} {
+      allow get: if isValidId(targetUid) && (isOwner(targetUid) || isFounder());
+      allow list: if isFounder();
+      allow create: if isFounder()
+        && isValidId(targetUid)
+        && isValidRoleGrant(incoming(), targetUid)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isFounder()
+        && isValidId(targetUid)
+        && isValidRoleGrant(incoming(), targetUid)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'targetEmail', 'note', 'grantedByUid', 'updatedAt']);
+      allow delete: if isFounder() && isValidId(targetUid);
+    }
+
+    // Platform Security & Branding Lock Settings (Editable ONLY by Founder & Developer)
+    match /platform_settings/{settingId} {
+      allow get: if isSignedIn() && isValidId(settingId) && settingId == 'global';
+      allow list: if false;
+      allow create: if isFounder()
+        && isValidId(settingId)
+        && isValidPlatformSettings(incoming(), settingId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isFounder()
+        && isValidId(settingId)
+        && isValidPlatformSettings(incoming(), settingId)
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'founderSignature', 'allowPublicBasicAccess', 'ephemeralPrivacyDefault',
+          'maxUploadSizeMb', 'lockFounderBranding', 'updatedByUid', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // Strictly Isolated Per-User Profiles & Patient Health Records
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false;
+      allow create: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(userId)
+        && isValidId(userId)
+        && isValidUserProfile(incoming(), userId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'role', 'updatedAt']);
+      allow delete: if isOwner(userId) && isValidId(userId);
+
+      match /patients/{patientId} {
+        allow get: if isOwner(userId) && isValidId(userId) && isValidId(patientId)
+          && existing().ownerId == request.auth.uid;
+        allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+        allow create: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(patientId)
+          && isValidPatientFile(incoming(), userId, patientId)
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+        allow update: if isOwner(userId)
+          && isValidId(userId)
+          && isValidId(patientId)
+          && isValidPatientFile(incoming(), userId, patientId)
+          && incoming().id == existing().id
+          && incoming().ownerId == existing().ownerId
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'fileNumber', 'fullName', 'age', 'sex',
+            'phoneOrNotes', 'chronicConditions', 'allergies', 'updatedAt'
+          ]);
+        allow delete: if isOwner(userId) && isValidId(userId) && isValidId(patientId)
+          && existing().ownerId == request.auth.uid;
+
+        match /visits/{visitId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(patientId) && isValidId(visitId)
+            && existing().ownerId == request.auth.uid
+            && exists(/databases/$(database)/documents/users/$(userId)/patients/$(patientId));
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isOwner(userId)
+            && isValidId(userId)
+            && isValidId(patientId)
+            && isValidId(visitId)
+            && isValidPatientVisit(incoming(), userId, patientId, visitId)
+            && exists(/databases/$(database)/documents/users/$(userId)/patients/$(patientId))
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time;
+          allow update: if isOwner(userId)
+            && isValidId(userId)
+            && isValidId(patientId)
+            && isValidId(visitId)
+            && isValidPatientVisit(incoming(), userId, patientId, visitId)
+            && exists(/databases/$(database)/documents/users/$(userId)/patients/$(patientId))
+            && incoming().id == existing().id
+            && incoming().ownerId == existing().ownerId
+            && incoming().patientId == existing().patientId
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && (
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'doctorReviewStatus', 'reviewedByDoctorName', 'reviewedAt', 'updatedAt'
+              ]) ||
+              incoming().diff(existing()).affectedKeys().hasOnly([
+                'fileNumber', 'visitDate', 'clinicOrDoctor', 'reasonAr',
+                'currentSymptomsAr', 'pastMedicalHistoryAr', 'drugAllergiesAr',
+                'vitalSigns', 'physicalExamAr', 'preliminaryDiagnosisAr',
+                'findingsOrRecommendationsAr', 'medicationsMentioned', 'labOrdersAr',
+                'doctorNotesAr', 'linkedReportIds', 'doctorReviewStatus',
+                'reviewedByDoctorName', 'reviewedAt', 'updatedAt'
+              ])
+            );
+          allow delete: if isOwner(userId) && isValidId(userId) && isValidId(patientId) && isValidId(visitId)
+            && existing().ownerId == request.auth.uid;
+        }
+
+        match /reports/{reportId} {
+          allow get: if isOwner(userId) && isValidId(userId) && isValidId(patientId) && isValidId(reportId)
+            && existing().ownerId == request.auth.uid
+            && exists(/databases/$(database)/documents/users/$(userId)/patients/$(patientId));
+          allow list: if isOwner(userId) && resource.data.ownerId == request.auth.uid;
+          allow create: if isOwner(userId)
+            && isValidId(userId)
+            && isValidId(patientId)
+            && isValidId(reportId)
+            && isValidPatientLabRecord(incoming(), userId, patientId, reportId)
+            && exists(/databases/$(database)/documents/users/$(userId)/patients/$(patientId))
+            && incoming().createdAt == request.time
+            && incoming().updatedAt == request.time;
+          allow update: if isOwner(userId)
+            && isValidId(userId)
+            && isValidId(patientId)
+            && isValidId(reportId)
+            && isValidPatientLabRecord(incoming(), userId, patientId, reportId)
+            && exists(/databases/$(database)/documents/users/$(userId)/patients/$(patientId))
+            && incoming().id == existing().id
+            && incoming().ownerId == existing().ownerId
+            && incoming().patientId == existing().patientId
+            && incoming().createdAt == existing().createdAt
+            && incoming().updatedAt == request.time
+            && incoming().diff(existing()).affectedKeys().hasOnly(['notes', 'updatedAt']);
+          allow delete: if isOwner(userId) && isValidId(userId) && isValidId(patientId) && isValidId(reportId)
+            && existing().ownerId == request.auth.uid;
+        }
+      }
+    }
+  }
+}
