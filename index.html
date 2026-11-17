@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>الطبيب الذكي AI</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:Arial,sans-serif;background:#071321;color:white}
+header{background:#10263b;padding:25px 15px;text-align:center;border-bottom:2px solid #16c5a3}
+header h1{color:#27d6b4;margin:5px}
+header p{color:#c5d6e5}
+main{max-width:650px;margin:25px auto;padding:16px}
+.card{background:#112438;border:1px solid #29465c;border-radius:16px;padding:22px;margin-bottom:20px}
+h2{color:#35d6b5}
+input{width:100%;padding:14px;margin-top:12px;border-radius:10px;font-size:16px;background:#071321;color:white;border:1px solid #35d6b5}
+#result{margin-top:15px;color:#35d6b5;overflow-wrap:anywhere}
+#preview{max-width:100%;margin-top:15px;border-radius:10px}
+footer{text-align:center;color:#9aabba;padding:20px}
+</style>
+</head>
+<body>
+<header>
+<h1>🩺 الطبيب الذكي AI</h1>
+<p>مساعدك الطبي الذكي على مدار الساعة</p>
+</header>
+<main>
+<section class="card">
+<h2>مرحباً بك في الطبيب الذكي</h2>
+<p>منصة ذكية تساعدك على فهم المعلومات الصحية والتقارير الطبية.</p>
+</section>
+<section class="card">
+<h2>📁 رفع التحاليل والتقارير الطبية</h2>
+<p>اختر صورة تحليل أو تقرير طبي بصيغة PDF.</p>
+<input type="file" id="file" accept="image/*,.pdf">
+<div id="result"></div>
+<img id="preview" hidden alt="معاينة الصورة المختارة">
+</section>
+<section class="card">
+<h2>🤖 المساعد الطبي الذكي</h2>
+<p>سيتم إضافة المساعد الذكي وتحليل التقارير في المرحلة القادمة.</p>
+</section>
+<section class="card">
+<h2>🔒 الخصوصية والأمان</h2>
+<p>لا ترفع معلومات طبية شخصية حساسة قبل تجهيز نظام آمن لحفظ البيانات.</p>
+</section>
+</main>
+<footer>
+الطبيب الذكي AI © 2026
+<p>المعلومات للتوعية ولا تغني عن الطبيب المختص.</p>
+</footer>
+<script>
+const fileInput=document.getElementById('file');
+const result=document.getElementById('result');
+const preview=document.getElementById('preview');
+fileInput.addEventListener('change',function(){
+ const file=this.files[0];
+ preview.hidden=true;
+ preview.removeAttribute('src');
+ if(!file)return;
+ if(file.size>10*1024*1024){
+  result.textContent='حجم الملف أكبر من 10 ميجابايت';
+  this.value='';
+  return;
+ }
+ result.textContent='تم اختيار الملف: '+file.name;
+ if(file.type.startsWith('image/')){
+  preview.src=URL.createObjectURL(file);
+  preview.hidden=false;
+ }
+});
+</script>
+</body>
+</html>
